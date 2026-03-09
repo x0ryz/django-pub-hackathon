@@ -9,6 +9,9 @@ build:
 up:
 	$(COMPOSE) up -d
 
+attach:
+	$(COMPOSE) up
+
 down:
 	$(COMPOSE) down
 
