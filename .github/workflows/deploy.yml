@@ -44,25 +44,45 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd /opt/django-pub-hackathon
+            set -e
+            APP=/opt/django-pub-hackathon
 
-            mkdir -p environment
+            sudo mkdir -p "$APP/environment"
+            sudo chown -R "$USER:$USER" "$APP"
 
-            cat > environment/postgresql.env <<EOF
+            cat > "$APP/environment/postgresql.env" <<'ENVEOF'
             POSTGRES_DB=${{ secrets.POSTGRES_DB }}
             POSTGRES_USER=${{ secrets.POSTGRES_USER }}
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-            EOF
+            ENVEOF
 
-            cat > environment/backend.env <<EOF
+            cat > "$APP/environment/backend.env" <<'ENVEOF'
             DJANGO_SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
             DEBUG=False
             ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
-            DATABASE_URL=postgresql://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@db:5432/${{ secrets.POSTGRES_DB }}
-            EOF
+            POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+            POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            POSTGRES_HOST=db
+            ENVEOF
 
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u x0ryz --password-stdin
+            echo "${{ secrets.GHCR_TOKEN }}" | sudo docker login ghcr.io -u x0ryz --password-stdin 2>/dev/null
 
-            docker compose pull web
-            docker compose up -d --no-deps web
-            docker compose exec -T web python manage.py migrate --noinput
+            cd "$APP"
+            sudo docker compose pull web
+            sudo docker compose up -d
+
+            echo "Waiting for web container..."
+            for i in $(seq 1 30); do
+              STATUS=$(sudo docker inspect -f '{{.State.Status}}' django-pub-backend 2>/dev/null)
+              if [ "$STATUS" = "running" ]; then
+                echo "Container is running after ${i}s"
+                break
+              fi
+              echo "  status=$STATUS, retrying in 2s..."
+              sleep 2
+            done
+
+            sudo docker compose logs web --tail=30
+
+            sudo docker compose exec -T web python manage.py migrate --noinput
