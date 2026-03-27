@@ -43,6 +43,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'users',
+    'ecp_auth',
+]
+
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'ecp_auth.backends.ECPAuthenticationBackend',
 ]
 
 AUTH_USER_MODEL = 'users.User'

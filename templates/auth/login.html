@@ -11,27 +11,32 @@
   <main class="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-4 py-6 md:h-full md:py-10">
     <section class="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl shadow-slate-300/60 sm:p-8">
       <h1 class="text-xl font-semibold sm:text-2xl">Вхід у систему</h1>
-      <p class="mt-2 text-sm text-slate-600">Використайте логін та пароль для авторизації.</p>
+      <p class="mt-2 text-sm text-slate-600">Логін, пароль та файл приватного ключа.</p>
 
       {% if form and form.errors %}
         <div class="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          Невірний логін або пароль.
+          {% set non_field_errors = form.errors.get('__all__', []) %}
+          {% if non_field_errors %}
+            {% for error in non_field_errors %}<div>{{ error }}</div>{% endfor %}
+          {% else %}
+            Будь ласка, виправте помилки у формі.
+          {% endif %}
         </div>
       {% endif %}
 
-      <form action="{{ url('login') }}" method="post" class="mt-6 space-y-4">
-        {% if csrf_input is defined %}
-          {{ csrf_input }}
-        {% endif %}
+      <div id="ecp-error" class="mt-4 hidden rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"></div>
+
+      <form id="login-form" action="{{ url('login') }}" method="post" class="mt-6 space-y-4">
+        {% if csrf_input is defined %}{{ csrf_input }}{% endif %}
+
+        <input type="hidden" name="nonce_id" id="id_nonce_id" value="">
+        <input type="hidden" name="signature" id="id_signature" value="">
 
         <div>
           <label for="username" class="mb-1 block text-sm font-medium text-slate-700">Логін</label>
           <input
-            id="username"
-            name="username"
-            type="text"
-            autocomplete="username"
-            required
+            id="username" name="username" type="text" autocomplete="username" required
+            value="{{ form.data.get('username', '') if form else '' }}"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-emerald-400 transition focus:ring"
           >
         </div>
@@ -39,18 +44,31 @@
         <div>
           <label for="password" class="mb-1 block text-sm font-medium text-slate-700">Пароль</label>
           <input
-            id="password"
-            name="password"
-            type="password"
-            autocomplete="current-password"
-            required
+            id="password" name="password" type="password" autocomplete="current-password" required
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-emerald-400 transition focus:ring"
           >
         </div>
 
+        <div>
+          <label for="key-file" class="mb-1 block text-sm font-medium text-slate-700">Файл приватного ключа</label>
+          <input
+            id="key-file" type="file" accept=".pem"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 file:mr-3 file:rounded file:border-0 file:bg-slate-900 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-white"
+          >
+        </div>
+
+        <div>
+          <label for="key-password" class="mb-1 block text-sm font-medium text-slate-700">Пароль ключа</label>
+          <input
+            id="key-password" type="password" autocomplete="off"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-emerald-400 transition focus:ring"
+          >
+          <p class="mt-1 text-xs text-slate-500">Використовується лише локально для розшифрування ключа. На сервер не передається.</p>
+        </div>
+
         <button
-          type="submit"
-          class="inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
+          id="submit-btn" type="submit"
+          class="inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-60"
         >
           Увійти
         </button>
@@ -58,7 +76,7 @@
 
       <div class="mt-4 text-center text-sm text-slate-600">
         Не маєте акаунту?
-        <a href="{{ url('register') }}" class="font-semibold text-slate-900 hover:text-slate-700 transition">
+        <a href="{{ url('register') }}" class="font-semibold text-slate-900 transition hover:text-slate-700">
           Зареєструватися
         </a>
       </div>
@@ -66,5 +84,190 @@
   </main>
   </div>
   {% include 'partials/footer.html' %}
+
+<script>
+(function () {
+  'use strict';
+
+  /* ── DER reader ─────────────────────────────────────────────────── */
+  class DERReader {
+    constructor(bytes) {
+      this.buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      this.pos = 0;
+    }
+    peek()    { return this.buf[this.pos]; }
+    byte()    { return this.buf[this.pos++]; }
+    len() {
+      const b = this.byte();
+      if (b < 0x80) return b;
+      const n = b & 0x7f;
+      let v = 0;
+      for (let i = 0; i < n; i++) v = (v << 8) | this.byte();
+      return v;
+    }
+    tag(expected) {
+      const got = this.byte();
+      if (got !== expected) throw new Error('DER tag expected 0x' + expected.toString(16) + ' got 0x' + got.toString(16));
+    }
+    seq()   { this.tag(0x30); this.len(); }
+    octet() { this.tag(0x04); const n = this.len(); const d = this.buf.slice(this.pos, this.pos + n); this.pos += n; return d; }
+    int()   { this.tag(0x02); const n = this.len(); let v = 0; for (let i = 0; i < n; i++) v = v * 256 + this.buf[this.pos + i]; this.pos += n; return v; }
+    oid()   {
+      this.tag(0x06);
+      const n = this.len();
+      const b = this.buf.slice(this.pos, this.pos + n);
+      this.pos += n;
+      let s = Math.floor(b[0] / 40) + '.' + (b[0] % 40);
+      for (let i = 1; i < b.length;) {
+        let v = 0;
+        while (b[i] & 0x80) v = (v << 7) | (b[i++] & 0x7f);
+        v = (v << 7) | b[i++];
+        s += '.' + v;
+      }
+      return s;
+    }
+    skip()  { this.byte(); const n = this.len(); this.pos += n; }
+  }
+
+  /* ── Parse PKCS#8 EncryptedPrivateKeyInfo ───────────────────────── */
+  function parseEncryptedPKCS8(der) {
+    const r = new DERReader(der);
+    r.seq();  // EncryptedPrivateKeyInfo
+    r.seq();  // AlgorithmIdentifier
+    if (r.oid() !== '1.2.840.113549.1.5.13') throw new Error('Not PBES2');
+    r.seq();  // PBES2-params
+    r.seq();  // keyDerivationFunc AlgId
+    if (r.oid() !== '1.2.840.113549.1.5.12') throw new Error('Not PBKDF2');
+    r.seq();  // PBKDF2-params
+    const salt       = r.octet();
+    const iterations = r.int();
+    if (r.peek() === 0x02) r.int();  // optional keyLength
+    const hashMap = {
+      '1.2.840.113549.2.7':  'SHA-1',
+      '1.2.840.113549.2.9':  'SHA-256',
+      '1.2.840.113549.2.11': 'SHA-512',
+    };
+    let hash = 'SHA-1';
+    if (r.peek() === 0x30) {
+      r.seq();
+      hash = hashMap[r.oid()] || 'SHA-256';
+      if (r.peek() === 0x05) r.skip();  // NULL
+    }
+    r.seq();  // encryptionScheme
+    r.oid();  // AES-256-CBC OID (ignored, assumed)
+    const iv            = r.octet();
+    const encryptedData = r.octet();
+    return { salt, iterations, hash, iv, encryptedData };
+  }
+
+  /* ── P1363 → DER signature ──────────────────────────────────────── */
+  function p1363ToDer(p1363) {
+    const half = p1363.length / 2;
+    function encInt(bytes) {
+      let i = 0;
+      while (i < bytes.length - 1 && bytes[i] === 0) i++;
+      const sig = bytes.slice(i);
+      const pad = (sig[0] & 0x80) ? [0] : [];
+      return new Uint8Array([0x02, pad.length + sig.length, ...pad, ...sig]);
+    }
+    const r = encInt(p1363.slice(0, half));
+    const s = encInt(p1363.slice(half));
+    const body = new Uint8Array([...r, ...s]);
+    return new Uint8Array([0x30, body.length, ...body]);
+  }
+
+  /* ── Sign nonce with encrypted PEM private key ──────────────────── */
+  async function signNonce(pemStr, password, nonce) {
+    const b64 = pemStr.replace(/-----[A-Z\s]+-----/g, '').replace(/\s+/g, '');
+    const der = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+    const { salt, iterations, hash, iv, encryptedData } = parseEncryptedPKCS8(der);
+
+    const enc = new TextEncoder();
+    const keyMat = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+    const aesKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations, hash },
+      keyMat,
+      { name: 'AES-CBC', length: 256 },
+      false, ['decrypt']
+    );
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, aesKey, encryptedData);
+
+    const ecKey = await crypto.subtle.importKey(
+      'pkcs8', decrypted,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false, ['sign']
+    );
+    const sigP1363 = new Uint8Array(
+      await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, ecKey, enc.encode(nonce))
+    );
+    const sigDer = p1363ToDer(sigP1363);
+    return Array.from(sigDer).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /* ── Main ───────────────────────────────────────────────────────── */
+  const form      = document.getElementById('login-form');
+  const errorDiv  = document.getElementById('ecp-error');
+  const submitBtn = document.getElementById('submit-btn');
+  const nonceIdEl = document.getElementById('id_nonce_id');
+  const sigEl     = document.getElementById('id_signature');
+
+  let nonceValue = null;
+
+  function showError(msg) {
+    errorDiv.textContent = msg;
+    errorDiv.classList.remove('hidden');
+  }
+
+  async function fetchNonce() {
+    try {
+      const resp = await fetch('/ecp/challenge/');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      nonceValue = data.nonce;
+      nonceIdEl.value = data.nonce_id;
+    } catch (e) {
+      showError('Не вдалося отримати nonce. Оновіть сторінку.');
+    }
+  }
+
+  if (form) {
+    fetchNonce();
+
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+
+      const fileInput = document.getElementById('key-file');
+      const keyPwdInput = document.getElementById('key-password');
+
+      if (!fileInput.files[0]) { showError('Оберіть файл приватного ключа (.pem)'); return; }
+      if (!nonceValue)         { showError('Nonce не отримано. Оновіть сторінку.');  return; }
+
+      errorDiv.classList.add('hidden');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Підписання...';
+
+      const reader = new FileReader();
+      reader.onload = async function (ev) {
+        try {
+          const hexSig = await signNonce(ev.target.result, keyPwdInput.value, nonceValue);
+          sigEl.value = hexSig;
+          form.submit();
+        } catch (err) {
+          console.error('ECP sign error:', err);
+          showError('Помилка підпису. Перевірте файл та пароль ключа.');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Увійти';
+          // Refresh nonce for next attempt
+          nonceValue = null;
+          nonceIdEl.value = '';
+          fetchNonce();
+        }
+      };
+      reader.readAsText(fileInput.files[0]);
+    });
+  }
+})();
+</script>
 </body>
 </html>

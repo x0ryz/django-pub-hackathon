@@ -89,6 +89,28 @@
           {% endif %}
         </div>
 
+
+        
+        <div>
+          <label for="key_password" class="mb-1 block text-sm font-medium text-slate-700">Пароль для ключа</label>
+          <input
+            id="key_password"
+            name="key_password"
+            type="password"
+            autocomplete="off"
+            required
+            class="w-full rounded-lg border {% if form.key_password.errors %}border-rose-300{% else %}border-slate-300{% endif %} px-3 py-2 text-sm outline-none ring-emerald-400 transition focus:ring"
+          >
+          <p class="mt-1 text-xs text-slate-500">Захищає приватний ключ. Збережіть його — без нього вхід неможливий.</p>
+          {% if form.key_password.errors %}
+            <div class="mt-1 text-xs text-rose-600">
+              {% for error in form.key_password.errors %}
+                <div>{{ error }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+
         <button
           type="submit"
           class="inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
