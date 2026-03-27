@@ -12,11 +12,11 @@ from ecp_auth.generator import generate_key_and_certificate, private_key_to_pem
 from ecp_auth.mixins import ECPLoginMixin
 from ecp_auth.models import ECPCertificate
 
-from .forms import ECPLoginForm, RegisterForm
+from ecp_auth.forms import ECPLoginForm, ECPRegisterForm
 
 
 class RegisterView(CreateView):
-    form_class = RegisterForm
+    form_class = ECPRegisterForm
     template_name = "auth/register.html"
     success_url = reverse_lazy("key-download")
 
